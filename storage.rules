@@ -1,0 +1,79 @@
+rules_version = '2';
+
+// Firebase Cloud Storage Security Rules for SANTALI SMART STUDY
+// Target Storage Bucket: santali-smart-study.firebasestorage.app
+// Project ID: santali-smart-study
+// Free/No-Cost Quota Allocation: 5 GB-months Target
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions for security and role validation
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.admin == true ||
+        request.auth.token.email == "bhootn75@gmail.com"
+      );
+    }
+
+    function isValidImage() {
+      return request.resource.contentType.matches('image/.*')
+        && request.resource.size < 10 * 1024 * 1024; // Max 10MB
+    }
+
+    function isValidPdf() {
+      return request.resource.contentType == 'application/pdf'
+        && request.resource.size < 50 * 1024 * 1024; // Max 50MB
+    }
+
+    function isValidAudio() {
+      return (
+        request.resource.contentType.matches('audio/.*') ||
+        request.resource.contentType == 'audio/mpeg' ||
+        request.resource.contentType == 'audio/wav' ||
+        request.resource.contentType == 'audio/aac'
+      ) && request.resource.size < 30 * 1024 * 1024; // Max 30MB
+    }
+
+    function isValidEducationalMedia() {
+      return (
+        isValidPdf() ||
+        isValidAudio() ||
+        isValidImage()
+      );
+    }
+
+    // 1. Promotional Banners & App UI Assets
+    // Read: Authenticated Students & Admin
+    // Write/Delete: ONLY Admin
+    match /banners/{bannerFile} {
+      allow read: if isAuthenticated();
+      allow write, delete: if isAdmin() && isValidImage();
+    }
+
+    // 2. Course Educational Materials (PDF notes, Ol Chiki manuscripts, Audio lectures)
+    // Read: Authenticated Users
+    // Write/Delete/Replace: ONLY Admin (Students cannot upload or delete)
+    match /courses/{courseId}/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write, delete: if isAdmin() && isValidEducationalMedia();
+    }
+
+    // 3. Offline Practice Sets & JSON Backup Bundles
+    // Read & Write: ONLY Admin
+    match /backups/{backupFile} {
+      allow read, write, delete: if isAdmin();
+    }
+
+    // 4. Default Deny for all other paths
+    // Ensures NO direct unrestricted student upload or delete access
+    match /{allPaths=**} {
+      allow read: if isAuthenticated() && isAdmin();
+      allow write, delete: if false;
+    }
+  }
+}

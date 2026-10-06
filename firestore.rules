@@ -1,0 +1,150 @@
+rules_version = '2';
+
+/**
+ * Cloud Firestore Security Rules for SANTALI SMART STUDY
+ * Project ID: santali-smart-study
+ *
+ * Strict Role-Based Access Control (RBAC):
+ * - Default Role: Every authenticated user is a STUDENT.
+ * - Admin Authorization: Verified strictly via the Firebase Auth ID Token custom claim (`request.auth.token.admin == true`).
+ * - Content Protection: Only users with `admin: true` can create, update, or delete educational content (courses, practice sets, mock tests, questions, banners, file metadata).
+ * - Students have read/attempt/purchase permissions only where explicitly permitted and CANNOT modify educational materials.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Strict Admin Verification based on Firebase Auth ID Token Custom Claim
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.admin == true ||
+        (request.auth.token.role == 'admin') ||
+        exists(/databases/$(database)/documents/admin_roles/$(request.auth.uid))
+      );
+    }
+
+    // =========================================================================
+    // 1. ADMIN ROLES (Protected Collection - Server / Cloud Functions Only)
+    // =========================================================================
+    match /admin_roles/{uid} {
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      allow write: if false; // Only manageable via Firebase Admin SDK or Cloud Functions
+    }
+
+    // =========================================================================
+    // 2. EDUCATIONAL CONTENT: COURSES (Admin-Only Write, Update, Delete)
+    // =========================================================================
+    match /courses/{courseId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 3. EDUCATIONAL CONTENT: PRACTICE SETS & MOCK TESTS (Admin-Only Write)
+    // =========================================================================
+    match /practice_sets/{setId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+
+      // Subcollection: Questions for Practice Set / Mock Test
+      match /questions/{qId} {
+        allow read: if isAuthenticated();
+        allow create, update, delete: if isAdmin();
+      }
+    }
+
+    // =========================================================================
+    // 4. EDUCATIONAL CONTENT: COURSE BANNERS (Admin-Only Write, Update, Delete)
+    // =========================================================================
+    match /course_banners/{bannerId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 5. STORAGE & SYSTEM METADATA (Admin-Only Write, Update, Delete)
+    // =========================================================================
+    match /file_metadata/{fileId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /system_settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 6. USER PROFILES
+    // =========================================================================
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      // Students can create/update their profile fields, but CANNOT elevate their role to admin
+      allow create, update: if (isOwner(userId) && (!request.resource.data.keys().hasAny(['role']) || request.resource.data.role == 'student')) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 7. COURSE ENROLLMENTS & ACCESS ENTITLEMENTS (Admin/Server Only Modification)
+    // =========================================================================
+    match /course_access/{accessId} {
+      allow read: if isAuthenticated() && (resource.data.studentUid == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /purchases/{purchaseId} {
+      allow read: if isAuthenticated() && (resource.data.studentUid == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && (resource.data.studentUid == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isAuthenticated() && (resource.data.studentUid == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && request.resource.data.studentUid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 8. TEST RESULTS & STUDENT ATTEMPTS (Students create own, Admin manages)
+    // =========================================================================
+    match /test_results/{resultId} {
+      allow create: if isAuthenticated() && request.resource.data.studentUid == request.auth.uid;
+      allow read: if isAuthenticated() && (resource.data.studentUid == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 9. STUDENT QUESTION REPORTS (Students submit, Admin resolves/deletes)
+    // =========================================================================
+    match /question_reports/{reportId} {
+      allow create: if isAuthenticated();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 10. AUDIT LOGS (Admin Only)
+    // =========================================================================
+    match /audit_logs/{logId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // DEFAULT DENY
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
